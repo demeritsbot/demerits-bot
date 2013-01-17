@@ -3,6 +3,7 @@ var github = require('github');
 var exec = require('child_process').exec;
 var fs = require('fs');
 var temp = require('temp');
+var diff = require('diff');
 
 var client = new irc.Client('irc.mozilla.org', 'demerits', {
     channels: ['#dangerzone', '#amo-bots'],
@@ -22,7 +23,9 @@ function flakeData(data, callback) {
     temp.open('flake', function(err, info) {
         fs.write(info.fd, data);
         fs.close(info.fd, function(err) {
-            exec("pep8 '" + info.path + "'", function(err, stdout, stderr) {
+            var command = "pep8 '" + info.path + "'";
+            console.log(command);
+            exec(command, function(err, stdout, stderr) {
                 callback(stdout.split("\n").length, stdout);
             });
         });
@@ -46,6 +49,8 @@ client.addListener('message', function(from, to, message) {
                 console.error(error);
             var victim = data.committer.login;
             var parent_commit = data.parents[0].sha;
+            console.log("sha: " + sha);
+            console.log("parent: " + parent_commit);
             var files = [];
             var total_demerits = 0;
             var dem_ops = 0;
@@ -55,7 +60,7 @@ client.addListener('message', function(from, to, message) {
                 if(path.substr(path.length - 3) != ".py") continue;
                 dem_ops++;
                 (function(path) {
-                    var before, after, beforeFlakes, afterFlakes;
+                    var before, after, beforeFlakes, afterFlakes, bflak, aflak;
                     function handle() {
                         if(beforeFlakes === undefined || afterFlakes === undefined)
                             return;
@@ -66,39 +71,49 @@ client.addListener('message', function(from, to, message) {
                             var dems = afterFlakes - beforeFlakes;
                             client.say(to, "[" + path + "] " + dems + " demerits!");
                             total_demerits += dems;
+
+                            var dres = diff.diffLines(bflak, aflak);
+                            for(var d in dres) {
+                                var df = dres[d];
+                                if(victim == "mattbasta" && df.added) {
+                                    client.say(to, df.value);
+                                }
+                            }
                         }
                         dem_ops--;
                         if(dem_ops == 0) {
                             if(total_demerits)
-                                client.say(to, victim + " racked up " + total_demerits + ". boooooooo");
+                                client.say(to, victim + " racked up " + total_demerits + " demerits. Unsatisfactory.");
                             else
                                 client.say(to, victim + "'s work is satisfactory.");
                         }
                     }
                     gh.repos.getContent(
-                        {user: 'mozilla', repo: 'zamboni', sha: parent_commit, path: path},
+                        {user: 'mozilla', repo: 'zamboni', ref: parent_commit, path: path},
                         function(error, data) {
                             if(error)
                                 console.log(error);
                             console.log("Downloaded " + path + " before");
                             before = new Buffer(data.content, 'base64').toString('ascii');
                             flakeData(before, function(lines, output) {
-                                console.log(path + " before: " + lines);
+                                console.log(path + " before: " + lines + "\n" + output);
                                 beforeFlakes = lines;
+                                bflak = output;
                                 handle();
                             });
                         }
                     );
                     gh.repos.getContent(
-                        {user: 'mozilla', repo: 'zamboni', sha: sha, path: path},
+                        {user: 'mozilla', repo: 'zamboni', ref: sha, path: path},
                         function(error, data) {
                             if(error)
                                 console.log(error);
                             console.log("Downloaded " + path + " after");
                             after = new Buffer(data.content, 'base64').toString('ascii');
                             flakeData(after, function(lines, output) {
-                                console.log(path + " after: " + lines);
+                                console.log(path + " after: " + lines + "\n" + output);
                                 afterFlakes = lines;
+                                aflak = output;
                                 handle();
                             });
                         }

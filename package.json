@@ -1,0 +1,31 @@
+{
+  "name": "demerits",
+  "version": "0.1.0",
+  "author": "Matt Basta <mattbasta+demerits@gmail.com>",
+  "description": "A bot that finds your code unsatisfactory.",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/demeritsbot/demerits-bot.git"
+  },
+  "keywords": [
+    "irc",
+    "bot",
+    "github",
+    "code",
+    "quality"
+  ],
+  "dependencies" : {
+    "github"   :  "*",
+    "diff"     :  "*",
+    "irc"      :  "*",
+    "temp"     :  "*"
+  },
+  "analyze": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=0.6"
+  }
+}

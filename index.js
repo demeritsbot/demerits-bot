@@ -25,11 +25,18 @@ var commit_match = /https:\/\/github.com\/([a-z0-9\-]+)\/([a-z0-9\-]+)\/commit\/
 
 function cleanpep8(data) {
     var split = data.split("\n");
+    var output = [];
     for(var i = 0; i < split.length; i++) {
         var str = split[i];
-        split[i] = str.substr(str.indexOf(':') + 1);
+        var str_split = str.substr(str.indexOf(':') + 1).split(':');
+        if(str_split.length < 3)
+            continue;
+        str_split[0] = parseInt(str_split[0]);
+        str_split[1] = parseInt(str_split[1]);
+        str_split[2] = str_split[2].substr(1);
+        output.push(str_split);
     }
-    return split.join("\n");
+    return output;
 }
 
 function flakeData(data, callback) {
@@ -48,13 +55,96 @@ function flakeData(data, callback) {
     });
 }
 
+function cleanjshint(data) {
+    var split = data.split("\n");
+    var output = []
+    for(var i = 0; i < split.length; i++) {
+        var str = split[i];
+        console.log(str);
+        var cio = str.indexOf(': ');
+        if(cio == -1)
+            continue;
+        var str_split = str.substr(cio + 2).split(', ');
+        str_split[0] = parseInt(str_split[0].substr(5));
+        str_split[1] = parseInt(str_split[1].substr(4));
+        console.log(str_split);
+        output.push(str_split);
+    }
+    return output;
+}
+
+function jshintData(data, callback) {
+    temp.open('jshint', function(err, info) {
+        fs.write(info.fd, data);
+        fs.close(info.fd, function(err) {
+            var command = "jshint '" + info.path + "'";
+            console.log(command);
+            exec(command, function(err, stdout, stderr) {
+                callback(
+                    stdout.split("\n").length,
+                    cleanjshint(stdout)
+                );
+            });
+        });
+    });
+}
+
+extmap = {
+    '.py': flakeData,
+    '.js': jshintData
+}
+
+function getNewOutput(oldout, newout) {
+    if(oldout.length == 0)
+        return newout;
+    if(newout.length == 0)
+        return [];
+
+    function p_eq(i, j) {
+        if(oldout[i][0] < newout[j][0])
+            return -1;
+        else if (oldout[i][0] > newout[j][0])
+            return 1;
+        if(oldout[i][1] < newout[j][1])
+            return -1;
+        else if (oldout[i][1] > newout[j][1])
+            return 1;
+        return 0;
+    }
+    // i == pointer in old output
+    var i = 0;
+    // j == pointer in new output
+    var j = 0;
+    var result = [];
+    for(j = 0; j < newout.length; j++) {
+        var e = p_eq(i, j);
+        if(e == -1) {
+            result.push(newout[j]);
+            continue;
+        }
+        if(e == 0) {
+            i++;
+            continue;
+        }
+        if(e == 1) {
+            j++;
+            i--;
+            continue;
+        }
+    }
+    return result;
+}
+
 function process(owner, repo, sha, say) {
     console.log(owner, repo, sha);
     gh.repos.getCommit(
         {user: owner, repo: repo, sha: sha},
         function(error, data) {
-            if(error)
+            if(error) {
                 console.error(error);
+                say('There was an error fetching that commit.');
+                say(error.message);
+            }
             var victim = data.committer.login;
             var parent_commit = data.parents[0].sha;
             console.log("sha: " + sha);
@@ -64,8 +154,14 @@ function process(owner, repo, sha, say) {
             var dem_ops = 0;
             for(var f in data.files) {
                 var path = data.files[f].filename;
+                var ext = path.substr(path.length - 3);
+
+                if(!(ext in extmap)) {
+                    continue;
+                }
+                var processor = extmap[ext];
+
                 files.push(path);
-                if(path.substr(path.length - 3) != ".py") continue;
                 dem_ops++;
                 (function(path) {
                     var before, after,
@@ -82,12 +178,10 @@ function process(owner, repo, sha, say) {
                             say("[" + path + "] " + dems + " demerits!");
                             total_demerits += dems;
 
-                            var dres = diff.diffLines(bflak, aflak);
+                            var dres = getNewOutput(bflak, aflak);
                             for(var d in dres) {
-                                var df = dres[d];
-                                if(df.added) {
-                                   say(df.value);
-                                }
+                                say(dres[d][2]);
+                                // TODO: Make github comments here.
                             }
 
                             gh.authenticate({
@@ -107,17 +201,23 @@ function process(owner, repo, sha, say) {
                             if(total_demerits)
                                say(victim + " racked up " + total_demerits + " demerits. Unsatisfactory.");
                             else
-                               say(victim + "'s work is satisfactory.");
+                               say("The work is satisfactory.");
                         }
                     }
                     gh.repos.getContent(
                         {user: owner, repo: repo, ref: parent_commit, path: path},
                         function(error, data) {
-                            if(error)
+                            if(error) {
                                 console.log(error);
+                                before = '';
+                                beforeFlakes = 0;
+                                bflak = [];
+                                handle();
+                                return;
+                            }
                             console.log("Downloaded " + path + " before");
                             before = new Buffer(data.content, 'base64').toString('ascii');
-                            flakeData(before, function(lines, output) {
+                            processor(before, function(lines, output) {
                                 console.log(path + " before: " + lines + "\n" + output);
                                 beforeFlakes = lines;
                                 bflak = output;
@@ -128,11 +228,19 @@ function process(owner, repo, sha, say) {
                     gh.repos.getContent(
                         {user: owner, repo: repo, ref: sha, path: path},
                         function(error, data) {
+                            if(error) {
+                                console.log(error);
+                                after = '';
+                                afterFlakes = 0;
+                                aflak = [];
+                                handle();
+                                return;
+                            }
                             if(error)
                                 console.log(error);
                             console.log("Downloaded " + path + " after");
                             after = new Buffer(data.content, 'base64').toString('ascii');
-                            flakeData(after, function(lines, output) {
+                            processor(after, function(lines, output) {
                                 console.log(path + " after: " + lines + "\n" + output);
                                 afterFlakes = lines;
                                 aflak = output;
@@ -161,9 +269,9 @@ client.addListener('message', function(from, to, message) {
     var repo = result[2];
     var sha = result[3];
 
-    if(settings.github_owners && settings.github_owners.indexOf(owner) == -1)
+    if(settings.github_users.length && settings.github_users.indexOf(owner) == -1)
         return;
-    if(settings.github_repos && settings.github_repos.indexOf(repo) == -1)
+    if(settings.github_repos.length && settings.github_repos.indexOf(repo) == -1)
         return;
 
     if(from == ghbot)

@@ -42,7 +42,7 @@ function flakeData(data, callback) {
     temp.open('flake', function(err, info) {
         fs.write(info.fd, data);
         fs.close(info.fd, function(err) {
-            var command = "pep8 --first '" + info.path + "'";
+            var command = "pep8 --ignore=E1 '" + info.path + "'";
             console.log(command);
             exec(command, function(err, stdout, stderr) {
                 callback(
@@ -115,7 +115,13 @@ function getNewOutput(oldout, newout) {
     // j == pointer in new output
     var j = 0;
     var result = [];
+    //console.log(oldout, newout);
     for(j = 0; j < newout.length; j++) {
+        console.log(i, j);
+        if(i >= oldout.length) {
+            result.push(newout[j]);
+            continue;
+        }
         var e = p_eq(i, j);
         if(e == -1) {
             result.push(newout[j]);
@@ -127,15 +133,24 @@ function getNewOutput(oldout, newout) {
         }
         if(e == 1) {
             j++;
-            i--;
             continue;
         }
     }
     return result;
 }
 
+function login() {
+    gh.authenticate({
+        type: 'basic',
+        username: settings.gh_user,
+        password: settings.gh_pass
+    });
+}
+
 function process(owner, repo, sha, say) {
+    var short_sha = sha.substr(0, 7);
     console.log(owner, repo, sha);
+    login();
     gh.repos.getCommit(
         {user: owner, repo: repo, sha: sha},
         function(error, data) {
@@ -158,11 +173,14 @@ function process(owner, repo, sha, say) {
                 if(!(ext in extmap)) {
                     continue;
                 }
-                var processor = extmap[ext];
 
                 files.push(path);
                 dem_ops++;
                 (function(path) {
+                    // Get it again, now that we're in the closure and it's safe.
+                    var ext = path.substr(path.length - 3);
+                    var processor = extmap[ext];
+
                     var before, after,
                         beforeFlakes, afterFlakes,
                         bflak, aflak;
@@ -177,31 +195,18 @@ function process(owner, repo, sha, say) {
                             say("[" + path + "] " + dems + " demerits!");
                             total_demerits += dems;
 
+                            var messages = [];
                             var dres = getNewOutput(bflak, aflak);
                             for(var d in dres) {
                                 say(dres[d][2]);
-                                gh.authenticate({
-                                    type: 'basic',
-                                    username: settings.gh_user,
-                                    password: settings.gh_pass
-                                });
-                                // Comment on the line in the commit.
-                                gh.repos.createCommitComment(
-                                    {user: owner, repo: repo, sha: sha, commit_id: sha,
-                                     body: dres[d][2], path: path, line: dres[d][0]},
-                                    function(err, data) {}
-                                );
+                                messages.push('Line ' + dres[d][0] + ': ' + dres[d][2]);
                             }
 
-                            gh.authenticate({
-                                type: 'basic',
-                                username: settings.gh_user,
-                                password: settings.gh_pass
-                            });
+                            login();
                             // Comment and say how many demerits the commit was worth.
                             gh.repos.createCommitComment(
                                 {user: owner, repo: repo, sha: sha, commit_id: sha,
-                                 body: dems + " demerits!"},
+                                 body: dems + " demerits!\n" + messages.join('\n'), path: path},
                                 function(err, data) {}
                             );
                         }
@@ -213,6 +218,7 @@ function process(owner, repo, sha, say) {
                                say("The work is satisfactory.");
                         }
                     }
+                    login();
                     gh.repos.getContent(
                         {user: owner, repo: repo, ref: parent_commit, path: path},
                         function(error, data) {
@@ -227,13 +233,15 @@ function process(owner, repo, sha, say) {
                             console.log("Downloaded " + path + " before");
                             before = new Buffer(data.content, 'base64').toString('ascii');
                             processor(before, function(lines, output) {
-                                console.log(path + " before: " + lines + "\n" + output);
+                                console.log(path + " before: " + lines + "\n" + output.join('\n'));
                                 beforeFlakes = lines;
                                 bflak = output;
                                 handle();
                             });
                         }
                     );
+
+                    login();
                     gh.repos.getContent(
                         {user: owner, repo: repo, ref: sha, path: path},
                         function(error, data) {
@@ -250,7 +258,7 @@ function process(owner, repo, sha, say) {
                             console.log("Downloaded " + path + " after");
                             after = new Buffer(data.content, 'base64').toString('ascii');
                             processor(after, function(lines, output) {
-                                console.log(path + " after: " + lines + "\n" + output);
+                                console.log(path + " after: " + lines + "\n" + output.join('\n'));
                                 afterFlakes = lines;
                                 aflak = output;
                                 handle();
@@ -262,7 +270,7 @@ function process(owner, repo, sha, say) {
             }
 
             if(files.length == 0) {
-                say("[" + sha + "] There weren't any files I could understand.")
+                say("[" + short_sha + "] There weren't any files I could understand.")
             }
         }
     );
@@ -278,14 +286,14 @@ client.addListener('message', function(from, to, message) {
     var repo = result[2];
     var sha = result[3];
 
-    if(settings.github_users.length && settings.github_users.indexOf(owner) == -1)
-        return;
-    if(settings.github_repos.length && settings.github_repos.indexOf(repo) == -1)
-        return;
+    if(from == ghbot) {
+        if(settings.github_users.length && settings.github_users.indexOf(owner) == -1)
+            return;
+        if(settings.github_repos.length && settings.github_repos.indexOf(repo) == -1)
+            return;
 
-    if(from == ghbot)
         client.say(to, "[" + sha.substr(0, 7) + "] Imma just have a look at that...");
-    else
+    } else
         client.say(to, from + ": I'll take a look.");
 
     process(owner, repo, sha, function(message) {

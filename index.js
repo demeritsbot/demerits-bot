@@ -1,7 +1,6 @@
 var exec = require('child_process').exec;
 var fs = require('fs');
 
-var diff = require('diff');
 var github = require('github');
 var irc = require('irc');
 var temp = require('temp');

@@ -19,7 +19,6 @@
   ],
   "dependencies" : {
     "github"   :  "*",
-    "diff"     :  "*",
     "irc"      :  "*",
     "temp"     :  "*"
   },

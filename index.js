@@ -181,7 +181,17 @@ function process(owner, repo, sha, say) {
                             var dres = getNewOutput(bflak, aflak);
                             for(var d in dres) {
                                 say(dres[d][2]);
-                                // TODO: Make github comments here.
+                                gh.authenticate({
+                                    type: 'basic',
+                                    username: settings.gh_user,
+                                    password: settings.gh_pass
+                                });
+                                // Comment on the line in the commit.
+                                gh.repos.createCommitComment(
+                                    {user: owner, repo: repo, sha: sha, commit_id: sha,
+                                     body: dres[d][2], path: path, line: dres[d][0]},
+                                    function(err, data) {}
+                                );
                             }
 
                             gh.authenticate({
